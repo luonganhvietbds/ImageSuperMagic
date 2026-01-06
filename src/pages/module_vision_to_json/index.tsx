@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
     Upload,
     Image as ImageIcon,
@@ -18,50 +18,14 @@ import {
 import { useAppStore } from '../../state';
 import { visualSweep, fileToBase64 } from '../../services/ai.service';
 import { createJob, completeJob, failJob } from '../../services/job.service';
+import { getActivePrompt } from '../../services/promptBrain.service';
 import { assetOperations, generateUUID } from '../../db';
-import type { VisionJSON, Asset } from '../../types';
+import type { VisionJSON, Asset, PromptVersion } from '../../types';
 
 type TabId = 'input' | 'objects' | 'relationships' | 'text_ocr' | 'json_output';
 
-const VISION_PROMPT = `Analyze this image comprehensively and return a detailed JSON structure.
-
-Return JSON with:
-{
-  "meta": {
-    "image_quality": "High/Medium/Low",
-    "image_type": "Photo/Illustration/Screenshot/Diagram",
-    "resolution_estimation": "WxH"
-  },
-  "global_context": {
-    "scene_description": "detailed description",
-    "scene_type": "indoor/outdoor/abstract",
-    "time_of_day": "if determinable",
-    "lighting": {
-      "source": "Natural/Artificial/Mixed",
-      "direction": "description",
-      "quality": "Soft/Hard/Mixed"
-    },
-    "mood": "description"
-  },
-  "objects": [
-    {
-      "id": "obj_001",
-      "label": "object name",
-      "category": "Human/Animal/Furniture/Object/Architecture/Nature/Vehicle",
-      "location": "position in image",
-      "prominence": "Foreground/Midground/Background",
-      "visual_attributes": {
-        "color": "description",
-        "texture": "description",
-        "material": "if identifiable",
-        "state": "description"
-      },
-      "micro_details": ["list of fine details"]
-    }
-  ],
-  "semantic_relationships": ["list of relationships between objects"],
-  "detected_text": ["any text visible in the image"]
-}`;
+// Fallback prompt if none configured in Prompt Brain
+const FALLBACK_PROMPT = `Analyze this image and return a JSON with meta, global_context, objects, semantic_relationships, and detected_text.`;
 
 export default function VisionToJson() {
     const { apiKeyValid } = useAppStore();
@@ -73,6 +37,12 @@ export default function VisionToJson() {
     const [copied, setCopied] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [dragOver, setDragOver] = useState(false);
+    const [activePrompt, setActivePrompt] = useState<PromptVersion | null>(null);
+
+    // Load active prompt from Prompt Brain on mount
+    useEffect(() => {
+        getActivePrompt('vision_to_json').then(setActivePrompt);
+    }, []);
 
     const tabs = [
         { id: 'input' as TabId, label: 'Input', icon: ImageIcon },
@@ -125,7 +95,9 @@ export default function VisionToJson() {
         const job = await createJob('vision_to_json', [imageData.filename]);
 
         try {
-            const visionResult = await visualSweep(imageData.base64, imageData.mimeType, VISION_PROMPT);
+            // Use active prompt from Prompt Brain, fallback to default
+            const systemPrompt = activePrompt?.content || FALLBACK_PROMPT;
+            const visionResult = await visualSweep(imageData.base64, imageData.mimeType, systemPrompt);
             setResult(visionResult);
 
             // Save result as asset

@@ -207,6 +207,10 @@ export const promptOperations = {
         const prompt = await db.prompts.get(id);
         if (prompt?.isActive) throw new Error('Cannot delete active prompt');
         await db.prompts.delete(id);
+    },
+
+    async update(id: UUID, updates: Partial<PromptVersion>): Promise<void> {
+        await db.prompts.update(id, updates);
     }
 };
 

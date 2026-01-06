@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
     Upload,
     Image as ImageIcon,
@@ -17,8 +17,9 @@ import {
 import { useAppStore } from '../../state';
 import { analyzeIdentity, generatePanelSpec, fileToBase64, isInitialized } from '../../services/ai.service';
 import { createJob, completeJob, failJob } from '../../services/job.service';
+import { getActivePrompt } from '../../services/promptBrain.service';
 import { assetOperations, generateUUID } from '../../db';
-import type { IdentityJSON, Asset } from '../../types';
+import type { IdentityJSON, Asset, PromptVersion } from '../../types';
 
 type TabId = 'workspace' | 'panels' | 'batch' | 'prompt_usage' | 'exports';
 type WorkspaceSubTab = 'reference' | 'geometry' | 'markers';
@@ -48,37 +49,8 @@ interface UploadedImage {
     error?: string;
 }
 
-const IDENTITY_PROMPT = `Analyze this portrait image and extract detailed identity information in JSON format.
-
-Return a JSON object with:
-{
-  "meta": {
-    "source_image_quality": "High/Medium/Low",
-    "extraction_confidence": "percentage",
-    "critical_identity_markers": "brief description"
-  },
-  "identity_blueprint": {
-    "face_geometry": {
-      "face_shape": "description",
-      "forehead": { "height": "string", "shape": "string" },
-      "eye_area": { "eye_shape": "string", "eye_color": "hex_and_name", "eye_spacing": "string" },
-      "nose": { "length": "string", "width": "string", "bridge": "string" },
-      "mouth": { "width": "string", "lip_fullness": "string" },
-      "jaw_chin": { "jaw_angle": "string", "chin_shape": "string" }
-    },
-    "skin_texture": {
-      "base_tone": "hex_code",
-      "undertone": "warm/cool/neutral",
-      "texture_notes": "description",
-      "unique_marks": ["list of marks"]
-    },
-    "hair": {
-      "color": "description",
-      "texture": "description",
-      "style": "description"
-    }
-  }
-}`;
+// Fallback prompt if none is configured in Prompt Brain
+const FALLBACK_PROMPT = `Analyze this portrait image and extract detailed identity information in JSON format. Return a JSON with meta, identity_blueprint (face_geometry, skin_texture, hair).`;
 
 export default function GridToJson() {
     const { apiKeyValid } = useAppStore();
@@ -94,6 +66,12 @@ export default function GridToJson() {
     const [panelResults, setPanelResults] = useState<Record<number, object>>({});
     const [copied, setCopied] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [activePrompt, setActivePrompt] = useState<PromptVersion | null>(null);
+
+    // Load active prompt from Prompt Brain on mount
+    useEffect(() => {
+        getActivePrompt('grid_to_json').then(setActivePrompt);
+    }, []);
 
     const tabs = [
         { id: 'workspace' as TabId, label: 'Workspace' },
@@ -168,10 +146,12 @@ export default function GridToJson() {
         const job = await createJob('grid_to_json', [selectedImageId]);
 
         try {
+            // Use active prompt from Prompt Brain, fallback to default
+            const systemPrompt = activePrompt?.content || FALLBACK_PROMPT;
             const result = await analyzeIdentity(
                 selectedImage.base64,
                 selectedImage.mimeType,
-                IDENTITY_PROMPT
+                systemPrompt
             );
 
             setIdentityResult(result);

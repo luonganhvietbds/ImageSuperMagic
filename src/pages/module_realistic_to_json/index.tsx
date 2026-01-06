@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
     Type,
     Image as ImageIcon,
@@ -20,50 +20,15 @@ import {
 import { useAppStore } from '../../state';
 import { generateSpecFromText, generateSpecFromImage, fileToBase64 } from '../../services/ai.service';
 import { createJob, completeJob, failJob } from '../../services/job.service';
+import { getActivePrompt } from '../../services/promptBrain.service';
 import { assetOperations, generateUUID } from '../../db';
-import type { RealisticJSON, Asset } from '../../types';
+import type { RealisticJSON, Asset, PromptVersion } from '../../types';
 
 type TabId = 'builder' | 'assumptions' | 'json_spec' | 'variations';
 type InputMode = 'text' | 'image' | 'hybrid';
 
-const TEXT_PROMPT = `Based on this description, generate a comprehensive JSON specification for a realistic portrait image.
-
-Return JSON with this structure:
-{
-  "meta": {
-    "intent": "description of the creative intent",
-    "priorities": ["list of visual priorities"]
-  },
-  "subject": {
-    "identity": "description",
-    "demographics": {
-      "age_range": "e.g., 25-30",
-      "gender_presentation": "description"
-    },
-    "expression": "description",
-    "pose": "description"
-  },
-  "wardrobe": [
-    { "garment": "name", "material": "type", "color": "hex code", "fit": "description" }
-  ],
-  "environment": {
-    "setting": "description",
-    "background": "description",
-    "atmosphere": "description"
-  },
-  "lighting": {
-    "key": "main light description",
-    "fill": "fill light description",
-    "rim": "rim/hair light if applicable"
-  },
-  "camera": {
-    "lens": "focal length",
-    "aperture": "f-stop",
-    "focus": "focus point",
-    "angle": "camera angle"
-  },
-  "assumptions": ["list of inferences made from the input"]
-}`;
+// Fallback prompt if none configured in Prompt Brain
+const FALLBACK_PROMPT = `Generate a JSON specification for realistic image generation with meta, subject, wardrobe, environment, lighting, camera, and assumptions.`;
 
 export default function RealisticToJson() {
     const { apiKeyValid } = useAppStore();
@@ -79,6 +44,12 @@ export default function RealisticToJson() {
     const [copied, setCopied] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [dragOver, setDragOver] = useState(false);
+    const [activePrompt, setActivePrompt] = useState<PromptVersion | null>(null);
+
+    // Load active prompt from Prompt Brain on mount
+    useEffect(() => {
+        getActivePrompt('realistic_to_json').then(setActivePrompt);
+    }, []);
 
     const tabs = [
         { id: 'builder' as TabId, label: 'Builder' },
@@ -131,20 +102,22 @@ export default function RealisticToJson() {
 
         try {
             let generatedResult: RealisticJSON;
+            // Use active prompt from Prompt Brain, fallback to default
+            const systemPrompt = activePrompt?.content || FALLBACK_PROMPT;
 
             if (inputMode === 'text') {
-                generatedResult = await generateSpecFromText(inputDescription, TEXT_PROMPT);
+                generatedResult = await generateSpecFromText(inputDescription, systemPrompt);
             } else if (inputMode === 'image' && imageData) {
-                generatedResult = await generateSpecFromImage(imageData.base64, imageData.mimeType, TEXT_PROMPT);
+                generatedResult = await generateSpecFromImage(imageData.base64, imageData.mimeType, systemPrompt);
             } else if (inputMode === 'hybrid' && imageData) {
-                const hybridPrompt = `${TEXT_PROMPT}\n\nModifications to apply: ${hybridText}`;
+                const hybridPrompt = `${systemPrompt}\n\nModifications to apply: ${hybridText}`;
                 generatedResult = await generateSpecFromImage(imageData.base64, imageData.mimeType, hybridPrompt);
             } else {
                 throw new Error('Invalid input');
             }
 
             setResult(generatedResult);
-            setAssumptions(generatedResult.assumptions || []);
+            setAssumptions((generatedResult as any).assumptions || []);
 
             // Save result as asset
             const resultAsset: Asset = {

@@ -82,12 +82,10 @@ export interface PromptVersion {
     module: ModuleType;
     version: string;
     name: string;
-    systemPrompt: string;
-    schemaVersion: string;
+    content: string;
     isActive: boolean;
     createdAt: Timestamp;
-    createdBy: string;
-    notes?: string;
+    updatedAt?: Timestamp;
 }
 
 // ============================================================================
