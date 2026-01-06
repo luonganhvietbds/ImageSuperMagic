@@ -7,45 +7,51 @@ import {
     Upload,
     Layers,
     Brain,
-    Activity,
     CheckCircle,
     XCircle,
-    RefreshCw
+    RefreshCw,
+    Loader2
 } from 'lucide-react';
-
-// Mock data for demonstration
-const mockStats = {
-    totalImages: 1234,
-    totalJson: 3456,
-    activeJobs: 5,
-    failedJobs: 2
-};
-
-const mockRecentJobs = [
-    { id: 'job-001', module: 'grid_to_json', status: 'completed', time: '2 min ago', promptVersion: 'v1.0.0' },
-    { id: 'job-002', module: 'vision_to_json', status: 'running', time: '5 min ago', promptVersion: 'v1.0.0' },
-    { id: 'job-003', module: 'realistic_to_json', status: 'failed', time: '10 min ago', promptVersion: 'v1.0.0' },
-    { id: 'job-004', module: 'grid_to_json', status: 'completed', time: '15 min ago', promptVersion: 'v1.0.0' },
-    { id: 'job-005', module: 'grid_to_json', status: 'pending', time: '20 min ago', promptVersion: 'v1.0.0' },
-];
-
-const mockWorkerStatus = [
-    { name: 'Grid-to-JSON Worker', status: 'running', jobs: 3 },
-    { name: 'Vision-to-JSON Worker', status: 'running', jobs: 1 },
-    { name: 'Realistic-to-JSON Worker', status: 'idle', jobs: 0 },
-];
-
-const mockActivity = [
-    { type: 'batch_completed', message: 'Batch #42 completed with 10 images', time: '1 min ago' },
-    { type: 'prompt_updated', message: 'Grid-to-JSON prompt updated to v1.0.1', time: '5 min ago' },
-    { type: 'batch_started', message: 'Batch #43 started with 5 images', time: '8 min ago' },
-    { type: 'job_failed', message: 'Job #789 failed - API quota exceeded', time: '12 min ago' },
-];
+import { useNavigate } from 'react-router-dom';
+import { getJobStats, getAllJobs } from '../../services/job.service';
+import type { Job } from '../../types';
 
 type TabId = 'overview' | 'health' | 'activity';
 
+interface DashboardStats {
+    total: number;
+    pending: number;
+    running: number;
+    completed: number;
+    failed: number;
+}
+
 export default function Dashboard() {
+    const navigate = useNavigate();
     const [activeTab, setActiveTab] = useState<TabId>('overview');
+    const [loading, setLoading] = useState(true);
+    const [stats, setStats] = useState<DashboardStats>({ total: 0, pending: 0, running: 0, completed: 0, failed: 0 });
+    const [recentJobs, setRecentJobs] = useState<Job[]>([]);
+
+    const loadData = async () => {
+        setLoading(true);
+        try {
+            const [statsData, jobsData] = await Promise.all([
+                getJobStats(),
+                getAllJobs(10)
+            ]);
+            setStats(statsData);
+            setRecentJobs(jobsData);
+        } catch (error) {
+            console.error('Failed to load dashboard data:', error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        loadData();
+    }, []);
 
     const tabs = [
         { id: 'overview' as TabId, label: 'Overview' },
@@ -72,6 +78,16 @@ export default function Dashboard() {
         }
     };
 
+    const formatTime = (timestamp: number) => {
+        const diff = Date.now() - timestamp;
+        const minutes = Math.floor(diff / 60000);
+        if (minutes < 1) return 'Just now';
+        if (minutes < 60) return `${minutes} min ago`;
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) return `${hours} hr ago`;
+        return new Date(timestamp).toLocaleDateString();
+    };
+
     return (
         <div className="dashboard fade-in">
             {/* Tabs */}
@@ -93,22 +109,22 @@ export default function Dashboard() {
                     {/* KPI Cards */}
                     <div className="grid grid-4" style={{ marginBottom: 'var(--spacing-xl)' }}>
                         <div className="card kpi-card">
-                            <div className="kpi-value">{mockStats.totalImages.toLocaleString()}</div>
-                            <div className="kpi-label">Total Images Processed</div>
-                            <ImageIcon size={24} style={{ color: 'var(--color-accent-primary)', marginTop: 'var(--spacing-md)' }} />
+                            <div className="kpi-value">{loading ? '...' : stats.total.toLocaleString()}</div>
+                            <div className="kpi-label">Total Jobs</div>
+                            <FileJson size={24} style={{ color: 'var(--color-accent-primary)', marginTop: 'var(--spacing-md)' }} />
                         </div>
                         <div className="card kpi-card">
-                            <div className="kpi-value">{mockStats.totalJson.toLocaleString()}</div>
-                            <div className="kpi-label">Total JSON Generated</div>
-                            <FileJson size={24} style={{ color: 'var(--color-accent-secondary)', marginTop: 'var(--spacing-md)' }} />
+                            <div className="kpi-value">{loading ? '...' : stats.completed.toLocaleString()}</div>
+                            <div className="kpi-label">Completed</div>
+                            <CheckCircle size={24} style={{ color: 'var(--color-success)', marginTop: 'var(--spacing-md)' }} />
                         </div>
                         <div className="card kpi-card">
-                            <div className="kpi-value">{mockStats.activeJobs}</div>
+                            <div className="kpi-value">{loading ? '...' : (stats.running + stats.pending)}</div>
                             <div className="kpi-label">Active Jobs</div>
                             <Clock size={24} style={{ color: 'var(--color-info)', marginTop: 'var(--spacing-md)' }} />
                         </div>
                         <div className="card kpi-card">
-                            <div className="kpi-value">{mockStats.failedJobs}</div>
+                            <div className="kpi-value">{loading ? '...' : stats.failed}</div>
                             <div className="kpi-label">Failed Jobs</div>
                             <AlertCircle size={24} style={{ color: 'var(--color-error)', marginTop: 'var(--spacing-md)' }} />
                         </div>
@@ -118,33 +134,45 @@ export default function Dashboard() {
                     <div className="card" style={{ marginBottom: 'var(--spacing-xl)' }}>
                         <div className="card-header">
                             <h3 className="card-title">Recent Jobs</h3>
-                            <button className="btn btn-ghost">
-                                <RefreshCw size={16} /> Refresh
+                            <button className="btn btn-ghost" onClick={loadData} disabled={loading}>
+                                {loading ? <Loader2 size={16} className="spin" /> : <RefreshCw size={16} />} Refresh
                             </button>
                         </div>
                         <div className="card-body" style={{ padding: 0 }}>
-                            <table className="table">
-                                <thead>
-                                    <tr>
-                                        <th>Job ID</th>
-                                        <th>Module</th>
-                                        <th>Status</th>
-                                        <th>Time</th>
-                                        <th>Prompt Version</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {mockRecentJobs.map((job) => (
-                                        <tr key={job.id}>
-                                            <td style={{ fontFamily: 'var(--font-mono)', fontSize: '13px' }}>{job.id}</td>
-                                            <td>{getModuleLabel(job.module)}</td>
-                                            <td>{getStatusBadge(job.status)}</td>
-                                            <td style={{ color: 'var(--color-text-secondary)' }}>{job.time}</td>
-                                            <td style={{ fontFamily: 'var(--font-mono)', fontSize: '13px' }}>{job.promptVersion}</td>
+                            {loading ? (
+                                <div style={{ padding: 'var(--spacing-xl)', textAlign: 'center', color: 'var(--color-text-muted)' }}>
+                                    <Loader2 size={24} className="spin" style={{ marginBottom: 'var(--spacing-sm)' }} />
+                                    <div>Loading...</div>
+                                </div>
+                            ) : recentJobs.length === 0 ? (
+                                <div style={{ padding: 'var(--spacing-xl)', textAlign: 'center', color: 'var(--color-text-muted)' }}>
+                                    <FileJson size={32} style={{ marginBottom: 'var(--spacing-sm)' }} />
+                                    <div>No jobs yet. Start by uploading an image!</div>
+                                </div>
+                            ) : (
+                                <table className="table">
+                                    <thead>
+                                        <tr>
+                                            <th>Job ID</th>
+                                            <th>Module</th>
+                                            <th>Status</th>
+                                            <th>Time</th>
+                                            <th>Prompt Version</th>
                                         </tr>
-                                    ))}
-                                </tbody>
-                            </table>
+                                    </thead>
+                                    <tbody>
+                                        {recentJobs.map((job) => (
+                                            <tr key={job.id} onClick={() => navigate('/jobs')} style={{ cursor: 'pointer' }}>
+                                                <td style={{ fontFamily: 'var(--font-mono)', fontSize: '13px' }}>{job.id.slice(0, 8)}...</td>
+                                                <td>{getModuleLabel(job.module)}</td>
+                                                <td>{getStatusBadge(job.status)}</td>
+                                                <td style={{ color: 'var(--color-text-secondary)' }}>{formatTime(job.createdAt)}</td>
+                                                <td style={{ fontFamily: 'var(--font-mono)', fontSize: '13px' }}>{job.promptVersion}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            )}
                         </div>
                     </div>
 
@@ -155,14 +183,14 @@ export default function Dashboard() {
                         </div>
                         <div className="card-body">
                             <div style={{ display: 'flex', gap: 'var(--spacing-md)' }}>
-                                <button className="btn btn-primary">
-                                    <Upload size={16} /> Upload Image
+                                <button className="btn btn-primary" onClick={() => navigate('/grid-to-json')}>
+                                    <Upload size={16} /> Grid-to-JSON
                                 </button>
-                                <button className="btn btn-secondary">
-                                    <Layers size={16} /> Create Batch
+                                <button className="btn btn-secondary" onClick={() => navigate('/batch-manager')}>
+                                    <Layers size={16} /> Batch Manager
                                 </button>
-                                <button className="btn btn-secondary">
-                                    <Brain size={16} /> Open Prompt Brain
+                                <button className="btn btn-secondary" onClick={() => navigate('/prompt-brain')}>
+                                    <Brain size={16} /> Prompt Brain
                                 </button>
                             </div>
                         </div>
@@ -173,33 +201,39 @@ export default function Dashboard() {
             {/* System Health Tab */}
             {activeTab === 'health' && (
                 <div className="fade-in">
-                    {/* Worker Status */}
                     <div className="card" style={{ marginBottom: 'var(--spacing-xl)' }}>
                         <div className="card-header">
-                            <h3 className="card-title">Worker Status</h3>
+                            <h3 className="card-title">System Status</h3>
                         </div>
                         <div className="card-body">
                             <div className="grid grid-3">
-                                {mockWorkerStatus.map((worker) => (
-                                    <div
-                                        key={worker.name}
-                                        className="card"
-                                        style={{
-                                            padding: 'var(--spacing-lg)',
-                                            background: worker.status === 'running'
-                                                ? 'rgba(59, 130, 246, 0.1)'
-                                                : 'var(--color-bg-tertiary)'
-                                        }}
-                                    >
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)', marginBottom: 'var(--spacing-sm)' }}>
-                                            <span className={`status-indicator ${worker.status}`}></span>
-                                            <span style={{ fontWeight: 500 }}>{worker.name}</span>
-                                        </div>
-                                        <div style={{ color: 'var(--color-text-secondary)', fontSize: '14px' }}>
-                                            {worker.jobs} jobs in queue
-                                        </div>
+                                <div className="card" style={{ padding: 'var(--spacing-lg)', background: 'rgba(16, 185, 129, 0.1)' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)', marginBottom: 'var(--spacing-sm)' }}>
+                                        <span className="status-indicator running"></span>
+                                        <span style={{ fontWeight: 500 }}>Database</span>
                                     </div>
-                                ))}
+                                    <div style={{ color: 'var(--color-text-secondary)', fontSize: '14px' }}>
+                                        IndexedDB Connected
+                                    </div>
+                                </div>
+                                <div className="card" style={{ padding: 'var(--spacing-lg)', background: 'rgba(16, 185, 129, 0.1)' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)', marginBottom: 'var(--spacing-sm)' }}>
+                                        <span className="status-indicator running"></span>
+                                        <span style={{ fontWeight: 500 }}>Frontend</span>
+                                    </div>
+                                    <div style={{ color: 'var(--color-text-secondary)', fontSize: '14px' }}>
+                                        React + Vite
+                                    </div>
+                                </div>
+                                <div className="card" style={{ padding: 'var(--spacing-lg)', background: 'var(--color-bg-tertiary)' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)', marginBottom: 'var(--spacing-sm)' }}>
+                                        <span className="status-indicator idle"></span>
+                                        <span style={{ fontWeight: 500 }}>AI Workers</span>
+                                    </div>
+                                    <div style={{ color: 'var(--color-text-secondary)', fontSize: '14px' }}>
+                                        Ready (need API key)
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -212,13 +246,15 @@ export default function Dashboard() {
                         <div className="card-body">
                             <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-xl)' }}>
                                 <div>
-                                    <div style={{ fontSize: '48px', fontWeight: 700, color: 'var(--color-accent-primary)' }}>4</div>
+                                    <div style={{ fontSize: '48px', fontWeight: 700, color: 'var(--color-accent-primary)' }}>
+                                        {stats.pending + stats.running}
+                                    </div>
                                     <div style={{ color: 'var(--color-text-secondary)' }}>Total Jobs Queued</div>
                                 </div>
                                 <div style={{ flex: 1, height: '8px', background: 'var(--color-bg-tertiary)', borderRadius: 'var(--radius-full)' }}>
                                     <div
                                         style={{
-                                            width: '40%',
+                                            width: stats.total > 0 ? `${((stats.pending + stats.running) / Math.max(stats.total, 1)) * 100}%` : '0%',
                                             height: '100%',
                                             background: 'var(--color-accent-gradient)',
                                             borderRadius: 'var(--radius-full)'
@@ -236,50 +272,72 @@ export default function Dashboard() {
                 <div className="fade-in">
                     <div className="card">
                         <div className="card-header">
-                            <h3 className="card-title">Activity Timeline</h3>
+                            <h3 className="card-title">Recent Activity</h3>
                         </div>
                         <div className="card-body">
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
-                                {mockActivity.map((item, index) => (
-                                    <div
-                                        key={index}
-                                        style={{
-                                            display: 'flex',
-                                            alignItems: 'flex-start',
-                                            gap: 'var(--spacing-md)',
-                                            padding: 'var(--spacing-md)',
-                                            background: 'var(--color-bg-tertiary)',
-                                            borderRadius: 'var(--radius-md)'
-                                        }}
-                                    >
-                                        <div style={{
-                                            width: 32,
-                                            height: 32,
-                                            borderRadius: 'var(--radius-full)',
-                                            background: item.type === 'job_failed'
-                                                ? 'rgba(239, 68, 68, 0.2)'
-                                                : 'rgba(99, 102, 241, 0.2)',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            flexShrink: 0
-                                        }}>
-                                            {item.type === 'batch_completed' && <CheckCircle size={16} style={{ color: 'var(--color-success)' }} />}
-                                            {item.type === 'batch_started' && <Layers size={16} style={{ color: 'var(--color-info)' }} />}
-                                            {item.type === 'prompt_updated' && <Brain size={16} style={{ color: 'var(--color-accent-primary)' }} />}
-                                            {item.type === 'job_failed' && <XCircle size={16} style={{ color: 'var(--color-error)' }} />}
+                            {recentJobs.length === 0 ? (
+                                <div style={{ textAlign: 'center', padding: 'var(--spacing-xl)', color: 'var(--color-text-muted)' }}>
+                                    No activity yet
+                                </div>
+                            ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
+                                    {recentJobs.map((job) => (
+                                        <div
+                                            key={job.id}
+                                            style={{
+                                                display: 'flex',
+                                                alignItems: 'flex-start',
+                                                gap: 'var(--spacing-md)',
+                                                padding: 'var(--spacing-md)',
+                                                background: 'var(--color-bg-tertiary)',
+                                                borderRadius: 'var(--radius-md)'
+                                            }}
+                                        >
+                                            <div style={{
+                                                width: 32,
+                                                height: 32,
+                                                borderRadius: 'var(--radius-full)',
+                                                background: job.status === 'failed'
+                                                    ? 'rgba(239, 68, 68, 0.2)'
+                                                    : job.status === 'completed'
+                                                        ? 'rgba(16, 185, 129, 0.2)'
+                                                        : 'rgba(99, 102, 241, 0.2)',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                flexShrink: 0
+                                            }}>
+                                                {job.status === 'completed' && <CheckCircle size={16} style={{ color: 'var(--color-success)' }} />}
+                                                {job.status === 'running' && <Clock size={16} style={{ color: 'var(--color-info)' }} />}
+                                                {job.status === 'failed' && <XCircle size={16} style={{ color: 'var(--color-error)' }} />}
+                                                {job.status === 'pending' && <Clock size={16} style={{ color: 'var(--color-warning)' }} />}
+                                            </div>
+                                            <div style={{ flex: 1 }}>
+                                                <div style={{ fontWeight: 500 }}>
+                                                    {getModuleLabel(job.module)} job {job.status}
+                                                </div>
+                                                <div style={{ color: 'var(--color-text-muted)', fontSize: '13px' }}>
+                                                    {formatTime(job.createdAt)}
+                                                </div>
+                                            </div>
                                         </div>
-                                        <div style={{ flex: 1 }}>
-                                            <div style={{ fontWeight: 500 }}>{item.message}</div>
-                                            <div style={{ color: 'var(--color-text-muted)', fontSize: '13px' }}>{item.time}</div>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
             )}
+
+            <style>{`
+                @keyframes spin {
+                    from { transform: rotate(0deg); }
+                    to { transform: rotate(360deg); }
+                }
+                .spin {
+                    animation: spin 1s linear infinite;
+                }
+            `}</style>
         </div>
     );
 }

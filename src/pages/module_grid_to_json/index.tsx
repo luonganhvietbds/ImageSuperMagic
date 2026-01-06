@@ -6,14 +6,19 @@ import {
     Trash2,
     Copy,
     Download,
-    Eye,
     Grid3X3,
     Layers,
     FileJson,
     Sparkles,
-    RefreshCw,
-    ChevronRight
+    Loader2,
+    Check,
+    AlertCircle
 } from 'lucide-react';
+import { useAppStore } from '../../state';
+import { analyzeIdentity, generatePanelSpec, fileToBase64, isInitialized } from '../../services/ai.service';
+import { createJob, completeJob, failJob } from '../../services/job.service';
+import { assetOperations, generateUUID } from '../../db';
+import type { IdentityJSON, Asset } from '../../types';
 
 type TabId = 'workspace' | 'panels' | 'batch' | 'prompt_usage' | 'exports';
 type WorkspaceSubTab = 'reference' | 'geometry' | 'markers';
@@ -37,10 +42,46 @@ interface UploadedImage {
     filename: string;
     status: 'pending' | 'running' | 'completed' | 'failed';
     confidence?: number;
-    thumbnail?: string;
+    dataUrl?: string;
+    base64?: string;
+    mimeType?: string;
+    error?: string;
 }
 
+const IDENTITY_PROMPT = `Analyze this portrait image and extract detailed identity information in JSON format.
+
+Return a JSON object with:
+{
+  "meta": {
+    "source_image_quality": "High/Medium/Low",
+    "extraction_confidence": "percentage",
+    "critical_identity_markers": "brief description"
+  },
+  "identity_blueprint": {
+    "face_geometry": {
+      "face_shape": "description",
+      "forehead": { "height": "string", "shape": "string" },
+      "eye_area": { "eye_shape": "string", "eye_color": "hex_and_name", "eye_spacing": "string" },
+      "nose": { "length": "string", "width": "string", "bridge": "string" },
+      "mouth": { "width": "string", "lip_fullness": "string" },
+      "jaw_chin": { "jaw_angle": "string", "chin_shape": "string" }
+    },
+    "skin_texture": {
+      "base_tone": "hex_code",
+      "undertone": "warm/cool/neutral",
+      "texture_notes": "description",
+      "unique_marks": ["list of marks"]
+    },
+    "hair": {
+      "color": "description",
+      "texture": "description",
+      "style": "description"
+    }
+  }
+}`;
+
 export default function GridToJson() {
+    const { apiKeyValid } = useAppStore();
     const [activeTab, setActiveTab] = useState<TabId>('workspace');
     const [workspaceSubTab, setWorkspaceSubTab] = useState<WorkspaceSubTab>('reference');
     const [outputSubTab, setOutputSubTab] = useState<OutputSubTab>('identity');
@@ -48,6 +89,11 @@ export default function GridToJson() {
     const [images, setImages] = useState<UploadedImage[]>([]);
     const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
     const [dragOver, setDragOver] = useState(false);
+    const [analyzing, setAnalyzing] = useState(false);
+    const [identityResult, setIdentityResult] = useState<IdentityJSON | null>(null);
+    const [panelResults, setPanelResults] = useState<Record<number, object>>({});
+    const [copied, setCopied] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
     const tabs = [
         { id: 'workspace' as TabId, label: 'Workspace' },
@@ -57,52 +103,186 @@ export default function GridToJson() {
         { id: 'exports' as TabId, label: 'Exports' },
     ];
 
+    const handleFileUpload = async (files: File[]) => {
+        const imageFiles = files.filter(f => f.type.startsWith('image/'));
+
+        for (const file of imageFiles) {
+            const id = generateUUID();
+            const { base64, mimeType } = await fileToBase64(file);
+
+            const newImage: UploadedImage = {
+                id,
+                filename: file.name,
+                status: 'pending',
+                dataUrl: `data:${mimeType};base64,${base64}`,
+                base64,
+                mimeType
+            };
+
+            setImages(prev => [...prev, newImage]);
+
+            if (!selectedImageId) {
+                setSelectedImageId(id);
+            }
+
+            // Save to IndexedDB
+            const asset: Asset = {
+                id,
+                type: 'source_image',
+                filename: file.name,
+                mimeType,
+                data: `data:${mimeType};base64,${base64}`,
+                sizeBytes: file.size,
+                createdAt: Date.now()
+            };
+            await assetOperations.create(asset);
+        }
+    };
+
     const handleDrop = useCallback((e: React.DragEvent) => {
         e.preventDefault();
         setDragOver(false);
-        const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
-        const newImages: UploadedImage[] = files.map((file, i) => ({
-            id: `img-${Date.now()}-${i}`,
-            filename: file.name,
-            status: 'pending' as const,
-        }));
-        setImages(prev => [...prev, ...newImages]);
-        if (newImages.length > 0 && !selectedImageId) {
-            setSelectedImageId(newImages[0].id);
-        }
+        const files = Array.from(e.dataTransfer.files);
+        handleFileUpload(files);
     }, [selectedImageId]);
 
-    const handleAnalyze = () => {
-        if (!selectedImageId) return;
+    const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files) {
+            handleFileUpload(Array.from(e.target.files));
+        }
+    };
+
+    const handleAnalyze = async () => {
+        if (!selectedImageId || !apiKeyValid) return;
+
+        const selectedImage = images.find(img => img.id === selectedImageId);
+        if (!selectedImage?.base64 || !selectedImage.mimeType) return;
+
+        setAnalyzing(true);
+        setError(null);
         setImages(prev => prev.map(img =>
             img.id === selectedImageId ? { ...img, status: 'running' as const } : img
         ));
-        // Simulate analysis completion
-        setTimeout(() => {
+
+        // Create job record
+        const job = await createJob('grid_to_json', [selectedImageId]);
+
+        try {
+            const result = await analyzeIdentity(
+                selectedImage.base64,
+                selectedImage.mimeType,
+                IDENTITY_PROMPT
+            );
+
+            setIdentityResult(result);
             setImages(prev => prev.map(img =>
-                img.id === selectedImageId ? { ...img, status: 'completed' as const, confidence: 94 } : img
+                img.id === selectedImageId ? {
+                    ...img,
+                    status: 'completed' as const,
+                    confidence: parseInt(result.meta?.extraction_confidence || '90')
+                } : img
             ));
-        }, 2000);
+
+            // Save identity JSON as asset
+            const identityAsset: Asset = {
+                id: generateUUID(),
+                type: 'identity_json',
+                filename: `identity_${selectedImage.filename}.json`,
+                mimeType: 'application/json',
+                data: JSON.stringify(result, null, 2),
+                jobId: job.id,
+                createdAt: Date.now()
+            };
+            await assetOperations.create(identityAsset);
+            await completeJob(job.id, [identityAsset.id]);
+
+        } catch (err: any) {
+            const errorMsg = err.message || 'Analysis failed';
+            setError(errorMsg);
+            setImages(prev => prev.map(img =>
+                img.id === selectedImageId ? { ...img, status: 'failed' as const, error: errorMsg } : img
+            ));
+            await failJob(job.id, errorMsg);
+        } finally {
+            setAnalyzing(false);
+        }
     };
 
-    const mockIdentityJson = {
-        meta: {
-            source_image_quality: "High",
-            extraction_confidence: "94%",
-            critical_identity_markers: "Oval face, hazel eyes, mole on left cheek"
-        },
-        identity_blueprint: {
-            face_geometry: {
-                face_shape: "Oval with soft jawline",
-                forehead: { height: "Medium", shape: "Slightly rounded" },
-                eye_area: { eye_shape: "Almond", eye_color: "#6B8E4E (Hazel-green)" }
-            }
-        },
-        "...": "More data would appear here"
+    const handleGeneratePanel = async (panelNum: PanelNumber) => {
+        if (!identityResult || !apiKeyValid) return;
+
+        try {
+            const panelPrompt = `Generate a panel specification for Panel ${panelNum} (${PANEL_ANGLES[panelNum]}) based on this identity data. Return JSON with camera angle, lighting, and prompt details.`;
+            const result = await generatePanelSpec(identityResult, panelNum, panelPrompt);
+            setPanelResults(prev => ({ ...prev, [panelNum]: result }));
+        } catch (err: any) {
+            setError(err.message || 'Panel generation failed');
+        }
     };
+
+    const handleCopy = async (data: object) => {
+        await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
+
+    const handleDownload = (data: object, filename: string) => {
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    const removeImage = async (id: string) => {
+        setImages(prev => prev.filter(img => img.id !== id));
+        if (selectedImageId === id) {
+            setSelectedImageId(null);
+            setIdentityResult(null);
+        }
+        await assetOperations.delete(id);
+    };
+
+    const selectedImage = images.find(img => img.id === selectedImageId);
+
+    const gridPrompt = identityResult ? `Generate a single 3x3 grid image showing the EXACT SAME PERSON from 9 DIFFERENT camera angles.
+
+Portrait of a person with: ${identityResult.identity_blueprint?.skin_texture?.base_tone || 'natural'} skin tone, ${identityResult.identity_blueprint?.hair?.color || 'dark'} ${identityResult.identity_blueprint?.hair?.texture || ''} hair.
+
+Face shape: ${identityResult.identity_blueprint?.face_geometry?.face_shape || 'oval'}
+Eyes: ${identityResult.identity_blueprint?.face_geometry?.eye_area?.eye_color || 'brown'}
+Unique markers: ${identityResult.meta?.critical_identity_markers || 'none specified'}
+
+PANEL LAYOUT:
+- Row 1: Panel 1 HIGH ANGLE, Panel 2 LOW ANGLE, Panel 3 EYE-LEVEL
+- Row 2: Panel 4 DUTCH ANGLE, Panel 5 CLOSE-UP, Panel 6 OVER-SHOULDER
+- Row 3: Panel 7 PROFILE, Panel 8 45-DEGREE, Panel 9 BIRD'S EYE
+
+CRITICAL: All 9 panels must show the EXACT SAME PERSON with IDENTICAL features.
+Background: Solid white #FFFFFF
+Lighting: Studio, soft shadows` : '';
 
     return (
         <div className="grid-to-json-page fade-in">
+            {/* API Key Warning */}
+            {!apiKeyValid && (
+                <div style={{
+                    background: 'rgba(245, 158, 11, 0.1)',
+                    border: '1px solid rgba(245, 158, 11, 0.3)',
+                    borderRadius: 'var(--radius-md)',
+                    padding: 'var(--spacing-md)',
+                    marginBottom: 'var(--spacing-lg)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--spacing-sm)'
+                }}>
+                    <AlertCircle size={20} style={{ color: 'var(--color-warning)' }} />
+                    <span>Please configure your Gemini API key in Settings to enable AI analysis.</span>
+                </div>
+            )}
+
             {/* Tabs */}
             <div className="tabs">
                 {tabs.map((tab) => (
@@ -127,16 +307,24 @@ export default function GridToJson() {
                             </div>
                             <div className="card-body">
                                 {/* Upload Area */}
-                                <div
+                                <label
                                     className={`upload-area ${dragOver ? 'dragover' : ''}`}
                                     onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
                                     onDragLeave={() => setDragOver(false)}
                                     onDrop={handleDrop}
+                                    style={{ cursor: 'pointer' }}
                                 >
+                                    <input
+                                        type="file"
+                                        accept="image/*"
+                                        multiple
+                                        onChange={handleFileInput}
+                                        style={{ display: 'none' }}
+                                    />
                                     <Upload size={32} style={{ color: 'var(--color-accent-primary)', marginBottom: 'var(--spacing-md)' }} />
                                     <div style={{ fontWeight: 500, marginBottom: 'var(--spacing-xs)' }}>Drop images here</div>
                                     <div style={{ color: 'var(--color-text-muted)', fontSize: '13px' }}>or click to browse</div>
-                                </div>
+                                </label>
 
                                 {/* Image Queue */}
                                 {images.length > 0 && (
@@ -167,9 +355,14 @@ export default function GridToJson() {
                                                         borderRadius: 'var(--radius-sm)',
                                                         display: 'flex',
                                                         alignItems: 'center',
-                                                        justifyContent: 'center'
+                                                        justifyContent: 'center',
+                                                        overflow: 'hidden'
                                                     }}>
-                                                        <ImageIcon size={20} style={{ color: 'var(--color-text-muted)' }} />
+                                                        {img.dataUrl ? (
+                                                            <img src={img.dataUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                                        ) : (
+                                                            <ImageIcon size={20} style={{ color: 'var(--color-text-muted)' }} />
+                                                        )}
                                                     </div>
                                                     <div style={{ flex: 1, minWidth: 0 }}>
                                                         <div style={{ fontSize: '13px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -182,7 +375,11 @@ export default function GridToJson() {
                                                             </span>
                                                         </div>
                                                     </div>
-                                                    <button className="btn btn-ghost btn-icon" style={{ padding: 4 }}>
+                                                    <button
+                                                        className="btn btn-ghost btn-icon"
+                                                        style={{ padding: 4 }}
+                                                        onClick={(e) => { e.stopPropagation(); removeImage(img.id); }}
+                                                    >
                                                         <Trash2 size={14} />
                                                     </button>
                                                 </div>
@@ -191,13 +388,34 @@ export default function GridToJson() {
                                     </div>
                                 )}
 
+                                {/* Error Display */}
+                                {error && (
+                                    <div style={{
+                                        marginTop: 'var(--spacing-md)',
+                                        background: 'rgba(239, 68, 68, 0.1)',
+                                        border: '1px solid rgba(239, 68, 68, 0.3)',
+                                        borderRadius: 'var(--radius-md)',
+                                        padding: 'var(--spacing-sm)',
+                                        fontSize: '13px',
+                                        color: 'var(--color-error)'
+                                    }}>
+                                        {error}
+                                    </div>
+                                )}
+
                                 {/* Actions */}
                                 <div style={{ marginTop: 'var(--spacing-lg)', display: 'flex', gap: 'var(--spacing-sm)' }}>
-                                    <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleAnalyze} disabled={!selectedImageId}>
-                                        <Play size={16} /> Analyze Selected
-                                    </button>
-                                    <button className="btn btn-secondary" disabled={images.length === 0}>
-                                        <Sparkles size={16} /> Analyze All
+                                    <button
+                                        className="btn btn-primary"
+                                        style={{ flex: 1 }}
+                                        onClick={handleAnalyze}
+                                        disabled={!selectedImageId || !apiKeyValid || analyzing}
+                                    >
+                                        {analyzing ? (
+                                            <><Loader2 size={16} className="spin" /> Analyzing...</>
+                                        ) : (
+                                            <><Play size={16} /> Analyze Selected</>
+                                        )}
                                     </button>
                                 </div>
                             </div>
@@ -232,26 +450,43 @@ export default function GridToJson() {
                                         display: 'flex',
                                         alignItems: 'center',
                                         justifyContent: 'center',
-                                        color: 'var(--color-text-muted)'
+                                        color: 'var(--color-text-muted)',
+                                        overflow: 'hidden'
                                     }}>
-                                        {selectedImageId ? 'Portrait Viewer' : 'Select an image to analyze'}
+                                        {selectedImage?.dataUrl ? (
+                                            <img src={selectedImage.dataUrl} alt="Selected" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+                                        ) : (
+                                            'Select an image to analyze'
+                                        )}
                                     </div>
                                 )}
                                 {workspaceSubTab === 'geometry' && (
                                     <div style={{ padding: 'var(--spacing-md)', color: 'var(--color-text-secondary)' }}>
-                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 'var(--spacing-md)' }}>
-                                            <div><strong>Face Shape:</strong> Oval</div>
-                                            <div><strong>Eye Spacing:</strong> Average</div>
-                                            <div><strong>Nose Length:</strong> Medium</div>
-                                            <div><strong>Jaw Angle:</strong> Soft</div>
-                                        </div>
+                                        {identityResult?.identity_blueprint?.face_geometry ? (
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 'var(--spacing-md)' }}>
+                                                <div><strong>Face Shape:</strong> {identityResult.identity_blueprint.face_geometry.face_shape}</div>
+                                                <div><strong>Eye Shape:</strong> {identityResult.identity_blueprint.face_geometry.eye_area?.eye_shape}</div>
+                                                <div><strong>Eye Color:</strong> {identityResult.identity_blueprint.face_geometry.eye_area?.eye_color}</div>
+                                                <div><strong>Jaw:</strong> {identityResult.identity_blueprint.face_geometry.jaw_chin?.jaw_angle}</div>
+                                            </div>
+                                        ) : (
+                                            <div style={{ textAlign: 'center', color: 'var(--color-text-muted)' }}>
+                                                Analyze an image to see geometry data
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                                 {workspaceSubTab === 'markers' && (
                                     <div style={{ padding: 'var(--spacing-md)', color: 'var(--color-text-secondary)' }}>
-                                        <div style={{ marginBottom: 'var(--spacing-sm)' }}>• Mole on left cheek (2cm from nose)</div>
-                                        <div style={{ marginBottom: 'var(--spacing-sm)' }}>• Light freckles on nose bridge</div>
-                                        <div>• Slight asymmetry in eyebrows</div>
+                                        {identityResult?.identity_blueprint?.skin_texture?.unique_marks ? (
+                                            identityResult.identity_blueprint.skin_texture.unique_marks.map((mark, i) => (
+                                                <div key={i} style={{ marginBottom: 'var(--spacing-sm)' }}>• {mark}</div>
+                                            ))
+                                        ) : (
+                                            <div style={{ textAlign: 'center', color: 'var(--color-text-muted)' }}>
+                                                Analyze an image to see unique markers
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </div>
@@ -261,11 +496,6 @@ export default function GridToJson() {
                         <div className="card" style={{ flex: 1 }}>
                             <div className="card-header">
                                 <h3 className="card-title">3×3 Panel Grid</h3>
-                                <div style={{ display: 'flex', gap: 'var(--spacing-sm)' }}>
-                                    <button className="btn btn-secondary" style={{ fontSize: '12px', padding: '4px 8px' }}>
-                                        <Grid3X3 size={14} /> Generate All
-                                    </button>
-                                </div>
                             </div>
                             <div className="card-body">
                                 <div className="panel-grid">
@@ -281,13 +511,25 @@ export default function GridToJson() {
                                             <div className="panel-number">{num}</div>
                                             <div className="panel-label">{PANEL_ANGLES[num]}</div>
                                             <div style={{ display: 'flex', gap: 4, marginTop: 'var(--spacing-xs)' }}>
-                                                <button className="btn btn-ghost" style={{ padding: 4, fontSize: 10 }} title="Generate">
+                                                <button
+                                                    className="btn btn-ghost"
+                                                    style={{ padding: 4, fontSize: 10 }}
+                                                    title="Generate"
+                                                    onClick={(e) => { e.stopPropagation(); handleGeneratePanel(num); }}
+                                                    disabled={!identityResult}
+                                                >
                                                     <Play size={12} />
                                                 </button>
-                                                <button className="btn btn-ghost" style={{ padding: 4, fontSize: 10 }} title="View JSON">
-                                                    <FileJson size={12} />
-                                                </button>
-                                                <button className="btn btn-ghost" style={{ padding: 4, fontSize: 10 }} title="Copy Prompt">
+                                                <button
+                                                    className="btn btn-ghost"
+                                                    style={{ padding: 4, fontSize: 10 }}
+                                                    title="Copy JSON"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        if (panelResults[num]) handleCopy(panelResults[num]);
+                                                    }}
+                                                    disabled={!panelResults[num]}
+                                                >
                                                     <Copy size={12} />
                                                 </button>
                                             </div>
@@ -323,15 +565,25 @@ export default function GridToJson() {
                                     {outputSubTab === 'identity' && (
                                         <>
                                             <div style={{ display: 'flex', gap: 'var(--spacing-sm)', marginBottom: 'var(--spacing-md)' }}>
-                                                <button className="btn btn-ghost" style={{ fontSize: '12px' }}>
-                                                    <Copy size={14} /> Copy
+                                                <button
+                                                    className="btn btn-ghost"
+                                                    style={{ fontSize: '12px' }}
+                                                    onClick={() => identityResult && handleCopy(identityResult)}
+                                                    disabled={!identityResult}
+                                                >
+                                                    {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'Copied!' : 'Copy'}
                                                 </button>
-                                                <button className="btn btn-ghost" style={{ fontSize: '12px' }}>
+                                                <button
+                                                    className="btn btn-ghost"
+                                                    style={{ fontSize: '12px' }}
+                                                    onClick={() => identityResult && handleDownload(identityResult, 'identity.json')}
+                                                    disabled={!identityResult}
+                                                >
                                                     <Download size={14} /> Download
                                                 </button>
                                             </div>
                                             <div className="json-editor">
-                                                <pre>{JSON.stringify(mockIdentityJson, null, 2)}</pre>
+                                                <pre>{identityResult ? JSON.stringify(identityResult, null, 2) : '// Analyze an image to see results'}</pre>
                                             </div>
                                         </>
                                     )}
@@ -350,11 +602,9 @@ export default function GridToJson() {
                                                 </select>
                                             </div>
                                             <div className="json-editor">
-                                                <pre>{JSON.stringify({
-                                                    panel: { number: selectedPanelNumber, angle: PANEL_ANGLES[selectedPanelNumber] },
-                                                    identity_lock: { "...": "Identity details" },
-                                                    prompt: { full_prompt: "Ready-to-paste prompt..." }
-                                                }, null, 2)}</pre>
+                                                <pre>{panelResults[selectedPanelNumber]
+                                                    ? JSON.stringify(panelResults[selectedPanelNumber], null, 2)
+                                                    : '// Generate panel to see results'}</pre>
                                             </div>
                                         </>
                                     )}
@@ -374,21 +624,15 @@ export default function GridToJson() {
                                             </div>
                                             <div className="json-editor" style={{ maxHeight: 'none' }}>
                                                 <pre style={{ whiteSpace: 'pre-wrap', color: 'var(--color-text-secondary)' }}>
-                                                    {`Generate a single 3x3 grid image showing the EXACT SAME PERSON from 9 DIFFERENT camera angles.
-
-Portrait of a young woman with light olive skin (#EAC0A8) and scattered freckles across nose and cheeks...
-
-PANEL LAYOUT:
-- Row 1: Panel 1 HIGH ANGLE, Panel 2 LOW ANGLE, Panel 3 EYE-LEVEL
-- Row 2: Panel 4 DUTCH ANGLE, Panel 5 CLOSE-UP, Panel 6 OVER-SHOULDER
-- Row 3: Panel 7 PROFILE, Panel 8 45-DEGREE, Panel 9 BIRD'S EYE
-
-CRITICAL: 9 completely different perspectives.
-Background: Solid white #FFFFFF
-Lighting: Studio, soft shadows`}
+                                                    {gridPrompt || '// Analyze an image to generate grid prompt'}
                                                 </pre>
                                             </div>
-                                            <button className="btn btn-primary" style={{ marginTop: 'var(--spacing-md)', width: '100%' }}>
+                                            <button
+                                                className="btn btn-primary"
+                                                style={{ marginTop: 'var(--spacing-md)', width: '100%' }}
+                                                onClick={() => navigator.clipboard.writeText(gridPrompt)}
+                                                disabled={!gridPrompt}
+                                            >
                                                 <Copy size={16} /> Copy Grid Generation Prompt
                                             </button>
                                         </>
@@ -400,7 +644,7 @@ Lighting: Studio, soft shadows`}
                 </div>
             )}
 
-            {/* Panels Tab */}
+            {/* Other tabs remain similar but simplified */}
             {activeTab === 'panels' && (
                 <div className="fade-in">
                     <div className="card">
@@ -423,25 +667,16 @@ Lighting: Studio, soft shadows`}
                                                 fontWeight: 700
                                             }}>{num}</span>
                                             <span style={{ fontWeight: 600 }}>{PANEL_ANGLES[num]}</span>
-                                        </div>
-                                        <div style={{
-                                            height: 150,
-                                            background: 'var(--color-bg-tertiary)',
-                                            borderRadius: 'var(--radius-md)',
-                                            marginBottom: 'var(--spacing-md)',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            color: 'var(--color-text-muted)'
-                                        }}>
-                                            Preview
+                                            {panelResults[num] && <span className="badge badge-success">Generated</span>}
                                         </div>
                                         <div style={{ display: 'flex', gap: 'var(--spacing-sm)' }}>
-                                            <button className="btn btn-primary" style={{ flex: 1, fontSize: '12px' }}>
+                                            <button
+                                                className="btn btn-primary"
+                                                style={{ flex: 1, fontSize: '12px' }}
+                                                onClick={() => handleGeneratePanel(num)}
+                                                disabled={!identityResult}
+                                            >
                                                 <Play size={14} /> Generate
-                                            </button>
-                                            <button className="btn btn-secondary" style={{ fontSize: '12px' }}>
-                                                <Eye size={14} />
                                             </button>
                                         </div>
                                     </div>
@@ -452,7 +687,50 @@ Lighting: Studio, soft shadows`}
                 </div>
             )}
 
-            {/* Batch Tab */}
+            {activeTab === 'exports' && (
+                <div className="fade-in">
+                    <div className="card">
+                        <div className="card-header">
+                            <h3 className="card-title">Export Options</h3>
+                        </div>
+                        <div className="card-body">
+                            <div className="grid grid-3">
+                                <button
+                                    className="btn btn-secondary"
+                                    style={{ padding: 'var(--spacing-lg)', height: 'auto', flexDirection: 'column', gap: 'var(--spacing-sm)' }}
+                                    onClick={() => identityResult && handleDownload(identityResult, 'identity.json')}
+                                    disabled={!identityResult}
+                                >
+                                    <FileJson size={24} />
+                                    <span>Identity JSON</span>
+                                </button>
+                                <button
+                                    className="btn btn-secondary"
+                                    style={{ padding: 'var(--spacing-lg)', height: 'auto', flexDirection: 'column', gap: 'var(--spacing-sm)' }}
+                                    onClick={() => {
+                                        const all = { identity: identityResult, panels: panelResults };
+                                        handleDownload(all, 'full_export.json');
+                                    }}
+                                    disabled={!identityResult}
+                                >
+                                    <Download size={24} />
+                                    <span>Full Package</span>
+                                </button>
+                                <button
+                                    className="btn btn-primary"
+                                    style={{ padding: 'var(--spacing-lg)', height: 'auto', flexDirection: 'column', gap: 'var(--spacing-sm)' }}
+                                    onClick={() => navigator.clipboard.writeText(gridPrompt)}
+                                    disabled={!gridPrompt}
+                                >
+                                    <Copy size={24} />
+                                    <span>Copy Grid Prompt</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {activeTab === 'batch' && (
                 <div className="fade-in">
                     <div className="card">
@@ -462,20 +740,16 @@ Lighting: Studio, soft shadows`}
                         <div className="card-body">
                             <div style={{ color: 'var(--color-text-secondary)', textAlign: 'center', padding: 'var(--spacing-2xl)' }}>
                                 <Layers size={48} style={{ color: 'var(--color-text-muted)', marginBottom: 'var(--spacing-md)' }} />
-                                <div style={{ fontWeight: 500, marginBottom: 'var(--spacing-sm)' }}>No active batches</div>
-                                <div style={{ fontSize: '14px', marginBottom: 'var(--spacing-lg)' }}>
-                                    Create a batch to process multiple images at once
+                                <div style={{ fontWeight: 500, marginBottom: 'var(--spacing-sm)' }}>Batch mode coming soon</div>
+                                <div style={{ fontSize: '14px' }}>
+                                    Process multiple images at once with batch operations
                                 </div>
-                                <button className="btn btn-primary">
-                                    <Layers size={16} /> Create New Batch
-                                </button>
                             </div>
                         </div>
                     </div>
                 </div>
             )}
 
-            {/* Prompt Usage Tab */}
             {activeTab === 'prompt_usage' && (
                 <div className="fade-in">
                     <div className="card">
@@ -488,40 +762,20 @@ Lighting: Studio, soft shadows`}
                                 <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>v1.0.0</span>
                                 <span style={{ color: 'var(--color-text-secondary)' }}>Grid-to-JSON Identity Cloning</span>
                             </div>
-                            <button className="btn btn-secondary">
-                                <Eye size={16} /> View Diff vs Current
-                            </button>
                         </div>
                     </div>
                 </div>
             )}
 
-            {/* Exports Tab */}
-            {activeTab === 'exports' && (
-                <div className="fade-in">
-                    <div className="card">
-                        <div className="card-header">
-                            <h3 className="card-title">Export Options</h3>
-                        </div>
-                        <div className="card-body">
-                            <div className="grid grid-3">
-                                <button className="btn btn-secondary" style={{ padding: 'var(--spacing-lg)', height: 'auto', flexDirection: 'column', gap: 'var(--spacing-sm)' }}>
-                                    <FileJson size={24} />
-                                    <span>JSON Only</span>
-                                </button>
-                                <button className="btn btn-secondary" style={{ padding: 'var(--spacing-lg)', height: 'auto', flexDirection: 'column', gap: 'var(--spacing-sm)' }}>
-                                    <ImageIcon size={24} />
-                                    <span>Images Only</span>
-                                </button>
-                                <button className="btn btn-primary" style={{ padding: 'var(--spacing-lg)', height: 'auto', flexDirection: 'column', gap: 'var(--spacing-sm)' }}>
-                                    <Download size={24} />
-                                    <span>Full Package</span>
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
+            <style>{`
+                @keyframes spin {
+                    from { transform: rotate(0deg); }
+                    to { transform: rotate(360deg); }
+                }
+                .spin {
+                    animation: spin 1s linear infinite;
+                }
+            `}</style>
         </div>
     );
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
     Image as ImageIcon,
     FileJson,
@@ -6,55 +6,122 @@ import {
     Package,
     Download,
     Trash2,
-    Eye
+    Eye,
+    Loader2,
+    RefreshCw
 } from 'lucide-react';
+import { assetOperations } from '../../db';
+import type { Asset, AssetType } from '../../types';
 
-type TabId = 'images' | 'identity_json' | 'panel_json' | 'prompts' | 'generated' | 'exports';
-
-interface AssetItem {
-    id: string;
-    filename: string;
-    type: string;
-    size: string;
-    createdAt: string;
-}
-
-const mockAssets: Record<TabId, AssetItem[]> = {
-    images: [
-        { id: 'img-001', filename: 'portrait_01.jpg', type: 'image/jpeg', size: '2.4 MB', createdAt: '1 hour ago' },
-        { id: 'img-002', filename: 'portrait_02.png', type: 'image/png', size: '3.1 MB', createdAt: '2 hours ago' },
-    ],
-    identity_json: [
-        { id: 'id-001', filename: 'identity_portrait_01.json', type: 'application/json', size: '12 KB', createdAt: '1 hour ago' },
-    ],
-    panel_json: [
-        { id: 'panel-001', filename: 'panel_1_portrait_01.json', type: 'application/json', size: '8 KB', createdAt: '1 hour ago' },
-        { id: 'panel-002', filename: 'panel_2_portrait_01.json', type: 'application/json', size: '8 KB', createdAt: '1 hour ago' },
-    ],
-    prompts: [
-        { id: 'prompt-001', filename: 'grid_prompt_portrait_01.txt', type: 'text/plain', size: '4 KB', createdAt: '1 hour ago' },
-    ],
-    generated: [
-        { id: 'gen-001', filename: 'grid_portrait_01.png', type: 'image/png', size: '5.2 MB', createdAt: '30 min ago' },
-    ],
-    exports: [
-        { id: 'exp-001', filename: 'batch_42_export.zip', type: 'application/zip', size: '45 MB', createdAt: '1 hour ago' },
-    ],
-};
+type TabId = 'all' | 'source_image' | 'identity_json' | 'panel_json' | 'grid_prompt' | 'generated_image';
 
 export default function Assets() {
-    const [activeTab, setActiveTab] = useState<TabId>('images');
+    const [activeTab, setActiveTab] = useState<TabId>('all');
+    const [assets, setAssets] = useState<Asset[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    const loadAssets = async () => {
+        setLoading(true);
+        try {
+            const allAssets = await assetOperations.getAll();
+            setAssets(allAssets);
+        } catch (error) {
+            console.error('Failed to load assets:', error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        loadAssets();
+    }, []);
+
+    const getAssetsByType = (type: AssetType): Asset[] => {
+        return assets.filter(a => a.type === type);
+    };
+
+    const filteredAssets = activeTab === 'all'
+        ? assets
+        : assets.filter(a => a.type === activeTab);
 
     const tabs = [
-        { id: 'images' as TabId, label: 'Images', icon: ImageIcon },
-        { id: 'identity_json' as TabId, label: 'Identity JSON', icon: FileJson },
-        { id: 'panel_json' as TabId, label: 'Panel JSON', icon: FileJson },
-        { id: 'prompts' as TabId, label: 'Prompts', icon: Type },
-        { id: 'generated' as TabId, label: 'Generated', icon: ImageIcon },
-        { id: 'exports' as TabId, label: 'Exports', icon: Package },
+        { id: 'all' as TabId, label: 'All', icon: Package, count: assets.length },
+        { id: 'source_image' as TabId, label: 'Images', icon: ImageIcon, count: getAssetsByType('source_image').length },
+        { id: 'identity_json' as TabId, label: 'Identity JSON', icon: FileJson, count: getAssetsByType('identity_json').length },
+        { id: 'panel_json' as TabId, label: 'Panel JSON', icon: FileJson, count: getAssetsByType('panel_json').length },
+        { id: 'grid_prompt' as TabId, label: 'Prompts', icon: Type, count: getAssetsByType('grid_prompt').length },
+        { id: 'generated_image' as TabId, label: 'Generated', icon: ImageIcon, count: getAssetsByType('generated_image').length },
     ];
 
-    const currentAssets = mockAssets[activeTab];
+    const formatTime = (timestamp: number) => {
+        const diff = Date.now() - timestamp;
+        const minutes = Math.floor(diff / 60000);
+        if (minutes < 1) return 'Just now';
+        if (minutes < 60) return `${minutes} min ago`;
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) return `${hours} hr ago`;
+        return new Date(timestamp).toLocaleDateString();
+    };
+
+    const formatSize = (bytes?: number) => {
+        if (!bytes) return 'N/A';
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    };
+
+    const getAssetIcon = (type: AssetType) => {
+        switch (type) {
+            case 'source_image':
+            case 'generated_image':
+                return <ImageIcon size={32} style={{ color: 'var(--color-text-muted)' }} />;
+            case 'identity_json':
+            case 'panel_json':
+                return <FileJson size={32} style={{ color: 'var(--color-accent-primary)' }} />;
+            case 'grid_prompt':
+                return <Type size={32} style={{ color: 'var(--color-warning)' }} />;
+            default:
+                return <Package size={32} style={{ color: 'var(--color-text-muted)' }} />;
+        }
+    };
+
+    const handleDelete = async (id: string) => {
+        try {
+            await assetOperations.delete(id);
+            await loadAssets();
+        } catch (error) {
+            console.error('Failed to delete asset:', error);
+        }
+    };
+
+    const handleDownload = (asset: Asset) => {
+        if (!asset.data) return;
+
+        let blob: Blob;
+        let filename = asset.filename || `asset-${asset.id}`;
+
+        if (asset.type === 'source_image' || asset.type === 'generated_image') {
+            // For images stored as base64
+            const byteString = atob(asset.data.split(',')[1] || asset.data);
+            const ab = new ArrayBuffer(byteString.length);
+            const ia = new Uint8Array(ab);
+            for (let i = 0; i < byteString.length; i++) {
+                ia[i] = byteString.charCodeAt(i);
+            }
+            blob = new Blob([ab], { type: asset.mimeType || 'image/png' });
+        } else {
+            // For JSON/text data
+            blob = new Blob([asset.data], { type: 'application/json' });
+            if (!filename.endsWith('.json')) filename += '.json';
+        }
+
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
 
     return (
         <div className="assets-page fade-in">
@@ -68,7 +135,7 @@ export default function Assets() {
                         <tab.icon size={16} style={{ marginRight: 'var(--spacing-xs)' }} />
                         {tab.label}
                         <span className="badge badge-info" style={{ marginLeft: 'var(--spacing-sm)' }}>
-                            {mockAssets[tab.id].length}
+                            {tab.count}
                         </span>
                     </button>
                 ))}
@@ -77,15 +144,26 @@ export default function Assets() {
             <div className="card">
                 <div className="card-header">
                     <h3 className="card-title">{tabs.find(t => t.id === activeTab)?.label}</h3>
+                    <button className="btn btn-ghost" onClick={loadAssets} disabled={loading}>
+                        {loading ? <Loader2 size={16} className="spin" /> : <RefreshCw size={16} />} Refresh
+                    </button>
                 </div>
                 <div className="card-body">
-                    {currentAssets.length === 0 ? (
+                    {loading ? (
                         <div style={{ textAlign: 'center', padding: 'var(--spacing-2xl)', color: 'var(--color-text-muted)' }}>
-                            No assets found
+                            <Loader2 size={32} className="spin" />
+                        </div>
+                    ) : filteredAssets.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: 'var(--spacing-2xl)', color: 'var(--color-text-muted)' }}>
+                            <Package size={48} style={{ marginBottom: 'var(--spacing-md)' }} />
+                            <div>No assets found</div>
+                            <div style={{ fontSize: '13px', marginTop: 'var(--spacing-sm)' }}>
+                                Assets will appear here as you process images
+                            </div>
                         </div>
                     ) : (
                         <div className="grid grid-4">
-                            {currentAssets.map(asset => (
+                            {filteredAssets.map(asset => (
                                 <div
                                     key={asset.id}
                                     className="card"
@@ -103,16 +181,17 @@ export default function Assets() {
                                         display: 'flex',
                                         alignItems: 'center',
                                         justifyContent: 'center',
-                                        marginBottom: 'var(--spacing-md)'
+                                        marginBottom: 'var(--spacing-md)',
+                                        overflow: 'hidden'
                                     }}>
-                                        {asset.type.startsWith('image') ? (
-                                            <ImageIcon size={32} style={{ color: 'var(--color-text-muted)' }} />
-                                        ) : asset.type === 'application/json' ? (
-                                            <FileJson size={32} style={{ color: 'var(--color-accent-primary)' }} />
-                                        ) : asset.type === 'application/zip' ? (
-                                            <Package size={32} style={{ color: 'var(--color-success)' }} />
+                                        {(asset.type === 'source_image' || asset.type === 'generated_image') && asset.data ? (
+                                            <img
+                                                src={asset.data.startsWith('data:') ? asset.data : `data:${asset.mimeType};base64,${asset.data}`}
+                                                alt={asset.filename}
+                                                style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                                            />
                                         ) : (
-                                            <Type size={32} style={{ color: 'var(--color-text-muted)' }} />
+                                            getAssetIcon(asset.type)
                                         )}
                                     </div>
 
@@ -125,21 +204,28 @@ export default function Assets() {
                                         whiteSpace: 'nowrap',
                                         marginBottom: 4
                                     }}>
-                                        {asset.filename}
+                                        {asset.filename || `${asset.type}-${asset.id.slice(0, 8)}`}
                                     </div>
                                     <div style={{ fontSize: '12px', color: 'var(--color-text-muted)', marginBottom: 'var(--spacing-sm)' }}>
-                                        {asset.size} • {asset.createdAt}
+                                        {formatSize(asset.sizeBytes)} • {formatTime(asset.createdAt)}
                                     </div>
 
                                     {/* Actions */}
                                     <div style={{ display: 'flex', gap: 'var(--spacing-xs)' }}>
-                                        <button className="btn btn-ghost btn-icon" style={{ padding: 4 }} title="Preview">
-                                            <Eye size={14} />
-                                        </button>
-                                        <button className="btn btn-ghost btn-icon" style={{ padding: 4 }} title="Download">
+                                        <button
+                                            className="btn btn-ghost btn-icon"
+                                            style={{ padding: 4 }}
+                                            title="Download"
+                                            onClick={() => handleDownload(asset)}
+                                        >
                                             <Download size={14} />
                                         </button>
-                                        <button className="btn btn-ghost btn-icon" style={{ padding: 4 }} title="Delete">
+                                        <button
+                                            className="btn btn-ghost btn-icon"
+                                            style={{ padding: 4 }}
+                                            title="Delete"
+                                            onClick={() => handleDelete(asset.id)}
+                                        >
                                             <Trash2 size={14} />
                                         </button>
                                     </div>
@@ -149,6 +235,16 @@ export default function Assets() {
                     )}
                 </div>
             </div>
+
+            <style>{`
+                @keyframes spin {
+                    from { transform: rotate(0deg); }
+                    to { transform: rotate(360deg); }
+                }
+                .spin {
+                    animation: spin 1s linear infinite;
+                }
+            `}</style>
         </div>
     );
 }
