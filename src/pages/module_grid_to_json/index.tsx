@@ -227,9 +227,9 @@ export default function GridToJson() {
 
     const selectedImage = images.find(img => img.id === selectedImageId);
 
-    const gridPrompt = identityResult ? `Generate a single 3x3 grid image showing the EXACT SAME PERSON from 9 DIFFERENT camera angles.
+    const gridPrompt = identityResult?.generation_settings?.grid_generation_prompt || (identityResult ? `Generate a single 3x3 grid image showing the EXACT SAME PERSON from 9 DIFFERENT camera angles.
 
-Portrait of a person with: ${identityResult.identity_blueprint?.skin_texture?.base_tone || 'natural'} skin tone, ${identityResult.identity_blueprint?.hair?.color || 'dark'} ${identityResult.identity_blueprint?.hair?.texture || ''} hair.
+Portrait of a person with: ${identityResult.identity_blueprint?.skin?.tone || 'natural'} skin tone, ${identityResult.hair?.color?.primary || 'dark'} ${identityResult.hair?.texture || ''} hair.
 
 Face shape: ${identityResult.identity_blueprint?.face_geometry?.face_shape || 'oval'}
 Eyes: ${identityResult.identity_blueprint?.face_geometry?.eye_area?.eye_color || 'brown'}
@@ -242,7 +242,7 @@ PANEL LAYOUT:
 
 CRITICAL: All 9 panels must show the EXACT SAME PERSON with IDENTICAL features.
 Background: Solid white #FFFFFF
-Lighting: Studio, soft shadows` : '';
+Lighting: Studio, soft shadows` : '');
 
     return (
         <div className="grid-to-json-page fade-in">
@@ -447,7 +447,7 @@ Lighting: Studio, soft shadows` : '';
                                                 <div><strong>Face Shape:</strong> {identityResult.identity_blueprint.face_geometry.face_shape}</div>
                                                 <div><strong>Eye Shape:</strong> {identityResult.identity_blueprint.face_geometry.eye_area?.eye_shape}</div>
                                                 <div><strong>Eye Color:</strong> {identityResult.identity_blueprint.face_geometry.eye_area?.eye_color}</div>
-                                                <div><strong>Jaw:</strong> {identityResult.identity_blueprint.face_geometry.jaw_chin?.jaw_angle}</div>
+                                                <div><strong>Jaw:</strong> {identityResult.identity_blueprint.face_geometry.jaw_and_chin?.jawline_shape}</div>
                                             </div>
                                         ) : (
                                             <div style={{ textAlign: 'center', color: 'var(--color-text-muted)' }}>
@@ -458,9 +458,9 @@ Lighting: Studio, soft shadows` : '';
                                 )}
                                 {workspaceSubTab === 'markers' && (
                                     <div style={{ padding: 'var(--spacing-md)', color: 'var(--color-text-secondary)' }}>
-                                        {identityResult?.identity_blueprint?.skin_texture?.unique_marks ? (
-                                            identityResult.identity_blueprint.skin_texture.unique_marks.map((mark, i) => (
-                                                <div key={i} style={{ marginBottom: 'var(--spacing-sm)' }}>• {mark}</div>
+                                        {identityResult?.identity_blueprint?.unique_markers?.moles?.length ? (
+                                            identityResult.identity_blueprint.unique_markers.moles.map((mole: { location: string; size: string; color: string }, i: number) => (
+                                                <div key={i} style={{ marginBottom: 'var(--spacing-sm)' }}>• {mole.location} - {mole.size}</div>
                                             ))
                                         ) : (
                                             <div style={{ textAlign: 'center', color: 'var(--color-text-muted)' }}>
@@ -732,15 +732,178 @@ Lighting: Studio, soft shadows` : '';
 
             {activeTab === 'prompt_usage' && (
                 <div className="fade-in">
-                    <div className="card">
+                    {/* Grid Generation Prompt Ready Section */}
+                    <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
                         <div className="card-header">
-                            <h3 className="card-title">Prompt Version Used</h3>
+                            <h3 className="card-title">Grid Generation Prompt Ready</h3>
+                            <span className="badge badge-success">Ready to Copy</span>
                         </div>
                         <div className="card-body">
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-md)', marginBottom: 'var(--spacing-lg)' }}>
+                            <p style={{ color: 'var(--color-text-secondary)', marginBottom: 'var(--spacing-md)' }}>
+                                The <code>grid_generation_prompt</code> field contains a complete, ready-to-paste prompt.
+                                Copy it and paste into a new image generation session to create your 3×3 multi-angle grid.
+                            </p>
+                            <div className="json-editor" style={{ maxHeight: 200, marginBottom: 'var(--spacing-md)' }}>
+                                <pre>{identityResult?.generation_settings?.grid_generation_prompt || '// Analyze an image first to generate grid prompt'}</pre>
+                            </div>
+                            <button
+                                className="btn btn-primary"
+                                style={{ width: '100%' }}
+                                onClick={() => {
+                                    if (identityResult?.generation_settings?.grid_generation_prompt) {
+                                        navigator.clipboard.writeText(identityResult.generation_settings.grid_generation_prompt);
+                                        setCopied(true);
+                                        setTimeout(() => setCopied(false), 2000);
+                                    }
+                                }}
+                                disabled={!identityResult?.generation_settings?.grid_generation_prompt}
+                            >
+                                {copied ? <Check size={16} /> : <Copy size={16} />}
+                                {copied ? 'Copied!' : 'Copy Grid Generation Prompt'}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Angle Selection Section */}
+                    <div className="card">
+                        <div className="card-header">
+                            <h3 className="card-title">Angle Selection</h3>
+                            <span style={{ color: 'var(--color-text-secondary)', fontSize: '14px' }}>
+                                Need an individual angle prompt instead?
+                            </span>
+                        </div>
+                        <div className="card-body">
+                            <p style={{ color: 'var(--color-text-secondary)', marginBottom: 'var(--spacing-lg)' }}>
+                                Reply with a number to get a specific angle's JSON, or click "ALL" for all 9 individual prompts.
+                            </p>
+
+                            {/* Angle Grid */}
+                            <div className="grid grid-3" style={{ gap: 'var(--spacing-md)', marginBottom: 'var(--spacing-xl)' }}>
+                                {([1, 2, 3, 4, 5, 6, 7, 8, 9] as PanelNumber[]).map(num => (
+                                    <button
+                                        key={num}
+                                        className={`btn ${selectedPanelNumber === num ? 'btn-primary' : 'btn-secondary'}`}
+                                        style={{
+                                            display: 'flex',
+                                            flexDirection: 'column',
+                                            alignItems: 'center',
+                                            padding: 'var(--spacing-md)',
+                                            height: 'auto',
+                                            gap: 'var(--spacing-xs)'
+                                        }}
+                                        onClick={() => setSelectedPanelNumber(num)}
+                                    >
+                                        <span style={{ fontSize: '24px', fontWeight: 700 }}>{num}</span>
+                                        <span style={{ fontSize: '12px' }}>{PANEL_ANGLES[num]}</span>
+                                    </button>
+                                ))}
+                            </div>
+
+                            {/* ALL Button */}
+                            <button
+                                className="btn btn-primary"
+                                style={{ width: '100%', marginBottom: 'var(--spacing-xl)' }}
+                                onClick={async () => {
+                                    if (identityResult) {
+                                        // Generate all 9 panels
+                                        for (const num of [1, 2, 3, 4, 5, 6, 7, 8, 9] as PanelNumber[]) {
+                                            if (!panelResults[num]) {
+                                                await handleGeneratePanel(num);
+                                            }
+                                        }
+                                    }
+                                }}
+                                disabled={!identityResult || analyzing}
+                            >
+                                <Grid3X3 size={16} />
+                                Generate ALL 9 Individual Prompts
+                            </button>
+
+                            {/* Selected Panel Display */}
+                            <div style={{
+                                background: 'var(--color-bg-tertiary)',
+                                borderRadius: 'var(--radius-md)',
+                                padding: 'var(--spacing-lg)'
+                            }}>
+                                <div style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 'var(--spacing-sm)',
+                                    marginBottom: 'var(--spacing-md)'
+                                }}>
+                                    <span style={{
+                                        width: 32,
+                                        height: 32,
+                                        background: 'var(--color-accent-gradient)',
+                                        borderRadius: 'var(--radius-sm)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        fontWeight: 700
+                                    }}>{selectedPanelNumber}</span>
+                                    <span style={{ fontWeight: 600, fontSize: '18px' }}>
+                                        PANEL {selectedPanelNumber} OF 9: {PANEL_ANGLES[selectedPanelNumber]}
+                                    </span>
+                                    {panelResults[selectedPanelNumber] && (
+                                        <span className="badge badge-success">Generated</span>
+                                    )}
+                                </div>
+
+                                {panelResults[selectedPanelNumber] ? (
+                                    <>
+                                        <div className="json-editor" style={{ maxHeight: 300, marginBottom: 'var(--spacing-md)' }}>
+                                            <pre>{JSON.stringify(panelResults[selectedPanelNumber], null, 2)}</pre>
+                                        </div>
+                                        <div style={{ display: 'flex', gap: 'var(--spacing-sm)' }}>
+                                            <button
+                                                className="btn btn-primary"
+                                                style={{ flex: 1 }}
+                                                onClick={() => handleCopy(panelResults[selectedPanelNumber])}
+                                            >
+                                                <Copy size={16} /> Copy Panel JSON
+                                            </button>
+                                            <button
+                                                className="btn btn-secondary"
+                                                style={{ flex: 1 }}
+                                                onClick={() => handleDownload(panelResults[selectedPanelNumber], `panel_${selectedPanelNumber}.json`)}
+                                            >
+                                                <Download size={16} /> Download
+                                            </button>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div style={{ textAlign: 'center', padding: 'var(--spacing-xl)', color: 'var(--color-text-muted)' }}>
+                                        <Sparkles size={32} style={{ marginBottom: 'var(--spacing-sm)' }} />
+                                        <div>Panel not yet generated</div>
+                                        <button
+                                            className="btn btn-primary"
+                                            style={{ marginTop: 'var(--spacing-md)' }}
+                                            onClick={() => handleGeneratePanel(selectedPanelNumber)}
+                                            disabled={!identityResult || analyzing}
+                                        >
+                                            <Play size={16} /> Generate This Panel
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Active Prompt Info */}
+                            <div style={{
+                                marginTop: 'var(--spacing-xl)',
+                                padding: 'var(--spacing-md)',
+                                background: 'rgba(99, 102, 241, 0.1)',
+                                borderRadius: 'var(--radius-md)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 'var(--spacing-md)'
+                            }}>
                                 <span className="badge badge-success">Active</span>
-                                <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>v1.0.0</span>
-                                <span style={{ color: 'var(--color-text-secondary)' }}>Grid-to-JSON Identity Cloning</span>
+                                <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
+                                    {activePrompt?.version || 'v2.0.0'}
+                                </span>
+                                <span style={{ color: 'var(--color-text-secondary)' }}>
+                                    {activePrompt?.name || 'Grid-to-JSON Identity Cloning v2'}
+                                </span>
                             </div>
                         </div>
                     </div>
