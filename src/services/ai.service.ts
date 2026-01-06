@@ -15,7 +15,7 @@ let model: GenerativeModel | null = null;
 export async function initializeGemini(apiKey: string): Promise<boolean> {
     try {
         geminiInstance = new GoogleGenerativeAI(apiKey);
-        model = geminiInstance.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+        model = geminiInstance.getGenerativeModel({ model: 'gemini-2.5-pro' });
 
         // Validate by making a simple request
         const result = await model.generateContent('Say "OK" if you can hear me.');
