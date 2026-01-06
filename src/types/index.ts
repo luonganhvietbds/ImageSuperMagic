@@ -121,20 +121,182 @@ export type AssetType =
 
 export interface IdentityJSON {
     meta: {
-        source_image_quality: string;
+        source_image_quality: 'Low' | 'Medium' | 'High' | 'Professional';
+        source_angle: string;
         extraction_confidence: string;
         critical_identity_markers: string;
     };
     identity_blueprint: {
-        face_geometry: Record<string, unknown>;
-        unique_markers: Record<string, unknown>;
-        skin: Record<string, unknown>;
+        face_geometry: {
+            face_shape: string;
+            face_length_to_width_ratio: string;
+            forehead: {
+                height: string;
+                width: string;
+                shape: string;
+                hairline_shape: string;
+            };
+            eye_area: {
+                eye_shape: string;
+                eye_size: string;
+                eye_color: string;
+                eye_spacing: string;
+                eyelid_type: string;
+                lash_description: string;
+                brow_to_eye_distance: string;
+                under_eye: string;
+            };
+            eyebrows: {
+                shape: string;
+                thickness: string;
+                color: string;
+                grooming: string;
+                spacing_from_center: string;
+            };
+            nose: {
+                overall_shape: string;
+                bridge_height: string;
+                bridge_width: string;
+                nose_length: string;
+                tip_shape: string;
+                nostril_shape: string;
+                nostril_visibility: string;
+            };
+            mouth_area: {
+                lip_shape: string;
+                upper_lip: string;
+                lower_lip: string;
+                lip_color: string;
+                mouth_width: string;
+                philtrum: string;
+                smile_characteristics: string;
+            };
+            cheek_area: {
+                cheekbone_prominence: string;
+                cheek_fullness: string;
+            };
+            jaw_and_chin: {
+                jawline_shape: string;
+                jaw_width: string;
+                chin_shape: string;
+                chin_prominence: string;
+            };
+        };
+        unique_markers: {
+            moles: Array<{ location: string; size: string; color: string }>;
+            freckles: { present: boolean; density: string; location: string };
+            scars: Array<{ location: string; size: string; appearance: string }>;
+            dimples: { present: boolean; location: string };
+            asymmetries: string[];
+            piercings: Array<{ location: string; type: string; material: string; size: string }>;
+        };
+        skin: {
+            tone: string;
+            hex_approximation: string;
+            texture: string;
+            finish: string;
+            characteristics: string[];
+        };
     };
-    hair: Record<string, unknown>;
-    outfit: Record<string, unknown>;
-    accessories: unknown[];
+    hair: {
+        color: {
+            primary: string;
+            hex_approximation: string;
+            secondary: string;
+            color_pattern: string;
+            shine_level: string;
+        };
+        texture: string;
+        thickness: string;
+        density: string;
+        length: string;
+        style: {
+            current_styling: string;
+            parting: string;
+            volume_distribution: string;
+            front_framing: string;
+        };
+        hairline: {
+            shape: string;
+            visibility: string;
+        };
+    };
+    facial_hair: {
+        present: boolean;
+        type: string | null;
+        details: string | null;
+    };
+    makeup_grooming: {
+        makeup_present: boolean;
+        makeup_level: string;
+        foundation: string;
+        eye_makeup: string;
+        lip_product: string;
+        other: string;
+    };
+    outfit: {
+        garment_type: string;
+        color: {
+            primary: string;
+            hex_approximation: string;
+            pattern: string;
+            pattern_details: string;
+        };
+        material: string;
+        material_appearance: string;
+        fit: string;
+        neckline: string;
+        sleeves: string;
+        distinguishing_features: string[];
+    };
+    accessories: Array<{
+        type: string;
+        description: string;
+        material: string;
+        color_hex: string;
+        placement: string;
+    }>;
+    source_lighting: {
+        type: string;
+        direction: string;
+        quality: string;
+        color_temperature: string;
+    };
     generation_settings: {
+        grid_layout: string;
+        background: string;
+        lighting_style: string;
+        expression: string;
+        universal_identity_prompt: string;
         grid_generation_prompt: string;
+    };
+    negative_prompt: string;
+}
+
+// Panel JSON for individual angle outputs
+export interface PanelJSON {
+    panel: {
+        number: number;
+        position: string;
+        angle_name: string;
+        camera_position: string;
+        subject_direction: string;
+    };
+    identity_lock: {
+        face_shape: string;
+        skin_tone: string;
+        eye_details: string;
+        nose_details: string;
+        lip_details: string;
+        hair: string;
+        makeup: string;
+        outfit: string;
+        accessories: string;
+        unique_markers: string;
+    };
+    prompt: {
+        full_prompt: string;
+        negative_prompt: string;
     };
 }
 
