@@ -85,7 +85,7 @@ export default function BatchManager() {
 
     const handleUpdateStatus = async (batchId: string, status: BatchStatus) => {
         try {
-            await batchOperations.updateStatus(batchId, status);
+            await batchOperations.update(batchId, { status });
             await loadBatches();
         } catch (error) {
             console.error('Failed to update batch:', error);
