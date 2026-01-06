@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Outlet, NavLink, useLocation } from 'react-router-dom';
 import {
     LayoutDashboard,
@@ -15,9 +15,12 @@ import {
     Activity,
     User,
     Bell,
-    Key
+    Key,
+    Cpu
 } from 'lucide-react';
 import { useAppStore } from '../state';
+import { getCurrentModelInfo, isInitialized } from '../services/ai.service';
+import type { GenerativeModel } from '@google/generative-ai';
 
 const navItems = [
     {
@@ -62,13 +65,39 @@ const moduleLabels: Record<string, string> = {
 
 export default function MainLayout() {
     const [collapsed, setCollapsed] = useState(false);
+    const [modelInfo, setModelInfo] = useState<{ name: string; index: number; total: number } | null>(null);
     const location = useLocation();
     const { apiKeyValid } = useAppStore();
     const currentModuleLabel = moduleLabels[location.pathname] || 'AI Image Platform';
 
+    // Poll for model status updates (to catch fallback switches)
+    useEffect(() => {
+        const checkModel = () => {
+            if (isInitialized() && apiKeyValid) {
+                try {
+                    setModelInfo(getCurrentModelInfo());
+                } catch (e) {
+                    // Ignore error if not init
+                }
+            } else {
+                setModelInfo(null);
+            }
+        };
+
+        checkModel();
+        const interval = setInterval(checkModel, 2000);
+        return () => clearInterval(interval);
+    }, [apiKeyValid]);
+
+    const getModelBadgeColor = () => {
+        if (!modelInfo) return 'var(--color-text-muted)';
+        if (modelInfo.index === 0) return 'var(--color-accent-primary)'; // Primary
+        return 'var(--color-warning)'; // Fallback
+    };
+
     return (
         <div className="app-layout">
-            {/* Sidebar */}
+            {/* Sidebar content remains same */}
             <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
                 <div className="sidebar-header">
                     <div className="sidebar-logo">
@@ -140,6 +169,37 @@ export default function MainLayout() {
                         <h1 className="header-module-label">{currentModuleLabel}</h1>
                     </div>
                     <div className="header-right">
+                        {/* Model Indicator */}
+                        {modelInfo && (
+                            <div
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 6,
+                                    padding: '4px 8px',
+                                    background: 'var(--color-bg-secondary)',
+                                    borderRadius: 'var(--radius-sm)',
+                                    fontSize: '12px',
+                                    border: '1px solid var(--color-border)',
+                                    marginRight: 'var(--spacing-sm)'
+                                }}
+                                title={modelInfo.index > 0 ? `Running on fallback model (Priority ${modelInfo.index + 1}/${modelInfo.total})` : 'Running on primary model'}
+                            >
+                                <Cpu size={14} style={{ color: getModelBadgeColor() }} />
+                                <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 500 }}>
+                                    {modelInfo.name}
+                                </span>
+                                {modelInfo.index > 0 && (
+                                    <span style={{
+                                        width: 6,
+                                        height: 6,
+                                        borderRadius: '50%',
+                                        background: 'var(--color-warning)'
+                                    }} />
+                                )}
+                            </div>
+                        )}
+
                         {/* API Status */}
                         {!apiKeyValid && (
                             <NavLink to="/settings" className="btn btn-secondary" style={{ fontSize: '13px' }}>
