@@ -1,0 +1,23 @@
+{
+    "modules": {
+        "grid_to_json": {
+            "activeVersion": "1.0.0",
+            "versions": [
+                "1.0.0"
+            ]
+        },
+        "vision_to_json": {
+            "activeVersion": "1.0.0",
+            "versions": [
+                "1.0.0"
+            ]
+        },
+        "realistic_to_json": {
+            "activeVersion": "1.0.0",
+            "versions": [
+                "1.0.0"
+            ]
+        }
+    },
+    "lastUpdated": 1736146800000
+}

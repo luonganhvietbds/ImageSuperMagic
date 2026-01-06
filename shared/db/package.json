@@ -1,0 +1,11 @@
+{
+    "name": "@ai-image-platform/db",
+    "version": "1.0.0",
+    "private": true,
+    "type": "module",
+    "main": "./index.ts",
+    "types": "./index.ts",
+    "dependencies": {
+        "dexie": "^4.0.0"
+    }
+}
